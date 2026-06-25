@@ -1,0 +1,111 @@
+---
+# CONFIGURE (app 3-tiers) — équivalent du `configure.yml` réseau.
+# Déploie la configuration applicative en fonction du rôle NetBox de
+# chaque hôte (netbox_role : web / app / db). Idempotent.
+#
+#   web : sert une page de santé HTTP sur :8080 (frontend)
+#   app : démarre un service applicatif HTTP /health sur :9000
+#   db  : démarre un service "base" HTTP /health sur :5432-like (:6000)
+#
+# Le service est un petit serveur HTTP Python (python3 déjà présent sur
+# les serveurs). Pas de dépendance réseau externe : la démo reste rapide
+# et déterministe.
+- name: Configure les services applicatifs selon le rôle NetBox
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    svc_dir: /opt/demo-app
+    ports:
+      web: 8080
+      app: 9000
+      db: 6000
+  tasks:
+    - name: Déterminer le rôle effectif
+      ansible.builtin.set_fact:
+        role: "{{ netbox_role | default('app') }}"
+        port: "{{ ports[netbox_role | default('app')] | default(9000) }}"
+
+    - name: Créer le répertoire de service
+      ansible.builtin.file:
+        path: "{{ svc_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Déposer le service HTTP (santé + identité)
+      ansible.builtin.copy:
+        dest: "{{ svc_dir }}/service.py"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import http.server, socketserver, json, os
+          ROLE = os.environ.get("SVC_ROLE", "app")
+          HOST = os.environ.get("SVC_HOST", "unknown")
+          PORT = int(os.environ.get("SVC_PORT", "9000"))
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  body = json.dumps({"status": "healthy", "role": ROLE, "host": HOST}).encode()
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+              def log_message(self, *a): pass
+          class Server(socketserver.TCPServer):
+              allow_reuse_address = True   # évite "Address already in use" au redémarrage
+          Server(("0.0.0.0", PORT), H).serve_forever()
+
+    - name: Écrire l'unité de lancement (script de démarrage)
+      ansible.builtin.copy:
+        dest: "{{ svc_dir }}/start.sh"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Redémarrage robuste. On tue l'ancien service par pidfile ET par
+          # balayage de /proc (sans matcher le shell courant $$), on attend
+          # la libération du port, puis on relance et on vérifie que le
+          # process tient (sinon échec explicite pour heal/configure).
+          SELF=$$
+          PIDFILE="{{ svc_dir }}/service.pid"
+          [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
+          for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+            [ "$pid" = "$SELF" ] && continue
+            if grep -qa "service.py" "/proc/$pid/cmdline" 2>/dev/null; then
+              kill "$pid" 2>/dev/null || true
+            fi
+          done
+          sleep 1
+          SVC_ROLE="{{ role }}" SVC_HOST="{{ inventory_hostname }}" SVC_PORT="{{ port }}" \
+            setsid nohup python3 {{ svc_dir }}/service.py >/var/log/demo-app.log 2>&1 &
+          NEWPID=$!
+          echo "$NEWPID" > "$PIDFILE"
+          sleep 1
+          if ! kill -0 "$NEWPID" 2>/dev/null; then
+            echo "ERREUR: le service n'a pas démarré (voir /var/log/demo-app.log)" >&2
+            tail -3 /var/log/demo-app.log >&2 2>/dev/null || true
+            exit 1
+          fi
+          echo "started {{ role }} on :{{ port }} (pid $NEWPID)"
+
+    - name: (Re)démarrer le service
+      ansible.builtin.command: "{{ svc_dir }}/start.sh"
+      changed_when: true
+
+    - name: Attendre que le service réponde
+      ansible.builtin.uri:
+        url: "http://localhost:{{ port }}/health"
+        return_content: true
+      register: health
+      retries: 5
+      delay: 2
+      until: health.status == 200
+
+    - name: Marquer la configuration comme déployée (pour compliance)
+      ansible.builtin.copy:
+        dest: "{{ svc_dir }}/.deployed"
+        content: "role={{ role }} port={{ port }}\n"
+        mode: "0644"
+
+    - name: Confirmer
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} ({{ role }}) configuré — service :{{ port }} répond {{ health.json.status }}"

@@ -1,0 +1,44 @@
+---
+# HEAL (app) — équivalent de `heal-drift.yml` + re-`configure`.
+# Ré-aligne l'hôte sur l'état désiré en relançant le service depuis la
+# configuration déployée. Après ce playbook, la compliance redevient VERTE.
+#
+# Note : en pratique on rejoue simplement le start.sh produit par
+# configure.yml — c'est le "re-render depuis le SoT" du storyboard
+# d'origine, transposé à un service applicatif.
+- name: Réparer la dérive (relancer le service depuis la config désirée)
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ne réparer que le tier web
+      ansible.builtin.meta: end_host
+      when: (netbox_role | default('')) != 'web'
+
+    - name: Vérifier que la config a déjà été déployée
+      ansible.builtin.stat:
+        path: /opt/demo-app/start.sh
+      register: startsh
+
+    - name: Échec clair si jamais configuré
+      ansible.builtin.fail:
+        msg: "{{ inventory_hostname }} n'a jamais été configuré (start.sh absent). Lance d'abord le playbook configure."
+      when: not startsh.stat.exists
+
+    - name: Relancer le service (heal)
+      ansible.builtin.command: /opt/demo-app/start.sh
+      changed_when: true
+
+    - name: Vérifier le retour à la normale
+      ansible.builtin.uri:
+        url: "http://localhost:8080/health"
+        return_content: true
+        status_code: 200
+      register: health
+      retries: 5
+      delay: 2
+      until: health.status == 200
+
+    - name: Confirmer la guérison
+      ansible.builtin.debug:
+        msg: "HEAL OK sur {{ inventory_hostname }} — service web rétabli ({{ health.json.status }}). Compliance de nouveau VERTE."

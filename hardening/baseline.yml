@@ -1,0 +1,74 @@
+---
+# BASELINE (hardening) — applique une baseline de sécurité sur tous les
+# serveurs. Équivalent "configure" pour la conformité sécurité.
+# Idempotent. Définit l'état désiré que l'audit contrôlera ensuite.
+#
+# Invariants posés :
+#   1. Fichier de politique /etc/demo-policy/baseline.conf (0644, root)
+#   2. Bannière /etc/motd conforme
+#   3. Permissions strictes 0600 sur /etc/demo-policy/secrets.conf
+#   4. Aucun utilisateur non autorisé (liste blanche)
+- name: Appliquer la baseline de sécurité
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    policy_dir: /etc/demo-policy
+    allowed_users: [root, ansible, appsvc]
+  tasks:
+    - name: Créer le répertoire de politique
+      ansible.builtin.file:
+        path: "{{ policy_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Déposer la politique de baseline
+      ansible.builtin.copy:
+        dest: "{{ policy_dir }}/baseline.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Baseline de sécurité — démo Ansible-UI
+          policy_version=1.0
+          ssh_permit_root_login=no
+          ssh_password_auth=no
+          managed_by=ansible
+          role={{ netbox_role | default('app') }}
+
+    - name: Bannière MOTD conforme
+      ansible.builtin.copy:
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: "0644"
+        content: "Système géré par Ansible-UI — accès réservé au personnel autorisé.\n"
+
+    - name: Utilisateur de service applicatif (non-login)
+      ansible.builtin.user:
+        name: appsvc
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Fichier secrets à permissions strictes
+      ansible.builtin.copy:
+        dest: "{{ policy_dir }}/secrets.conf"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "demo_secret=change-me\n"
+
+    - name: Enregistrer la liste blanche des comptes autorisés
+      ansible.builtin.copy:
+        dest: "{{ policy_dir }}/allowed_users.txt"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ allowed_users | join('\n') }}\n"
+
+    - name: Confirmer
+      ansible.builtin.debug:
+        msg: "Baseline appliquée sur {{ inventory_hostname }} ({{ netbox_role | default('app') }})."

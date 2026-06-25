@@ -1,0 +1,27 @@
+---
+# DRIFT (hardening) — simule une violation de la baseline sécurité.
+# Crée un compte non autorisé et relâche les permissions du fichier
+# secrets. L'audit passera au ROUGE jusqu'au heal.
+- name: Injecter une dérive de sécurité
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    policy_dir: /etc/demo-policy
+  tasks:
+    - name: Créer un compte non autorisé (rogue)
+      ansible.builtin.user:
+        name: hacker
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Relâcher les permissions du fichier secrets (0644)
+      ansible.builtin.file:
+        path: "{{ policy_dir }}/secrets.conf"
+        mode: "0644"
+      failed_when: false
+
+    - name: Confirmer la dérive
+      ansible.builtin.debug:
+        msg: "DRIFT sécurité injecté sur {{ inventory_hostname }} : compte 'hacker' créé + secrets en 0644. L'audit doit virer au ROUGE."

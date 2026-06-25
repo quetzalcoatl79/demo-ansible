@@ -1,0 +1,32 @@
+---
+# HEAL (hardening) — ré-aligne sur la baseline de sécurité.
+# Supprime le compte non autorisé et restaure les permissions strictes.
+# Après ce playbook, l'audit redevient VERT.
+#
+# En pratique, le "vrai" ré-alignement = supprimer les écarts connus PUIS
+# rejouer la baseline (idempotente). On reproduit ici le pattern
+# heal-drift + configure du storyboard d'origine.
+- name: Réparer la dérive de sécurité
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    policy_dir: /etc/demo-policy
+  tasks:
+    - name: Supprimer le compte non autorisé
+      ansible.builtin.user:
+        name: hacker
+        state: absent
+        remove: true
+
+    - name: Restaurer les permissions strictes du fichier secrets
+      ansible.builtin.file:
+        path: "{{ policy_dir }}/secrets.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      failed_when: false
+
+    - name: Confirmer la guérison
+      ansible.builtin.debug:
+        msg: "HEAL sécurité OK sur {{ inventory_hostname }} : compte 'hacker' supprimé + secrets en 0600. Relance baseline.yml pour réappliquer toute la politique si besoin."

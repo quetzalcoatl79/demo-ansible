@@ -1,0 +1,64 @@
+---
+# AUDIT (hardening) — contrôle de conformité sécurité (lecture seule).
+# Équivalent "compliance". ÉCHOUE (rouge) si un invariant de la baseline
+# est violé : politique absente, permissions relâchées, ou compte non
+# autorisé présent. Reste VERT quand tout est conforme.
+- name: Auditer la conformité à la baseline de sécurité
+  hosts: all
+  gather_facts: false
+  vars:
+    policy_dir: /etc/demo-policy
+  tasks:
+    - name: Vérifier la présence de la politique
+      ansible.builtin.stat:
+        path: "{{ policy_dir }}/baseline.conf"
+      register: pol
+
+    - name: Vérifier les permissions du fichier secrets
+      ansible.builtin.stat:
+        path: "{{ policy_dir }}/secrets.conf"
+      register: sec
+
+    - name: Lire la liste blanche des comptes autorisés
+      ansible.builtin.slurp:
+        path: "{{ policy_dir }}/allowed_users.txt"
+      register: allowed_raw
+      failed_when: false
+
+    - name: Lister les comptes humains réels (UID >= 1000)
+      ansible.builtin.shell: "awk -F: '$3>=1000 && $3<65534 {print $1}' /etc/passwd"
+      register: real_users
+      changed_when: false
+
+    - name: Calculer les comptes non autorisés
+      ansible.builtin.set_fact:
+        allowed_list: "{{ (allowed_raw.content | b64decode).split('\n') | select() | list if allowed_raw.content is defined else [] }}"
+      # appsvc a un UID < 1000 (system user) donc n'apparaît pas ; ansible (UID 1000) si présent.
+
+    - name: Déterminer les comptes en trop
+      ansible.builtin.set_fact:
+        rogue_users: "{{ real_users.stdout_lines | difference(allowed_list) }}"
+
+    - name: Évaluer la conformité globale
+      ansible.builtin.set_fact:
+        findings:
+          policy_present: "{{ pol.stat.exists }}"
+          secrets_mode_ok: "{{ sec.stat.exists and sec.stat.mode == '0600' }}"
+          no_rogue_users: "{{ rogue_users | length == 0 }}"
+
+    - name: Rapport d'audit
+      ansible.builtin.debug:
+        msg:
+          - "Hôte           : {{ inventory_hostname }} ({{ netbox_role | default('app') }})"
+          - "Politique       : {{ 'OK ✅' if findings.policy_present else 'ABSENTE ❌' }}"
+          - "Perm secrets     : {{ 'OK ✅ (0600)' if findings.secrets_mode_ok else 'RELÂCHÉE ❌' }}"
+          - "Comptes en trop  : {{ 'aucun ✅' if findings.no_rogue_users else (rogue_users | join(', ')) ~ ' ❌' }}"
+
+    - name: Échouer si non conforme (audit rouge)
+      ansible.builtin.assert:
+        that:
+          - findings.policy_present | bool
+          - findings.secrets_mode_ok | bool
+          - findings.no_rogue_users | bool
+        fail_msg: "NON CONFORME : {{ inventory_hostname }} viole la baseline (voir rapport ci-dessus). Lancer baseline/heal."
+        success_msg: "Conforme : {{ inventory_hostname }} respecte la baseline de sécurité."

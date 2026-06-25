@@ -1,0 +1,26 @@
+---
+# DRIFT (app) — équivalent de `simulate-drift.yml`.
+# Simule un changement non conforme : on arrête le service applicatif
+# sur les hôtes web (comme si un opérateur l'avait tué). La compliance
+# passera alors au ROUGE jusqu'au heal.
+- name: Injecter une dérive (arrêt du service web)
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ne dériver que le tier web
+      ansible.builtin.meta: end_host
+      when: (netbox_role | default('')) != 'web'
+
+    - name: Tuer le service applicatif (rogue change)
+      ansible.builtin.shell: |
+        PIDFILE=/opt/demo-app/service.pid
+        if [ -f "$PIDFILE" ]; then kill "$(cat "$PIDFILE")" 2>/dev/null || true; rm -f "$PIDFILE"; fi
+        echo "drift: service stoppé sur {{ inventory_hostname }}"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Confirmer la dérive
+      ansible.builtin.debug:
+        msg: "DRIFT injecté sur {{ inventory_hostname }} — le service web est arrêté. La compliance doit virer au ROUGE."

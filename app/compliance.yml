@@ -1,0 +1,47 @@
+---
+# COMPLIANCE (app 3-tiers) — équivalent du `compliance.yml` réseau.
+# Vérifie que le service applicatif attendu pour le rôle de l'hôte est
+# bien démarré et renvoie un statut "healthy". ÉCHOUE (rouge) si le
+# service n'est pas déployé/joignable — c'est l'état attendu avant
+# `configure.yml`, et l'état "vert" après.
+#
+# Pas de modification : lecture seule (assert). C'est un contrôle de
+# conformité, pas un déploiement.
+- name: Contrôle de conformité des services applicatifs
+  hosts: all
+  gather_facts: false
+  vars:
+    ports:
+      web: 8080
+      app: 9000
+      db: 6000
+  tasks:
+    - name: Déterminer rôle + port attendus
+      ansible.builtin.set_fact:
+        role: "{{ netbox_role | default('app') }}"
+        port: "{{ ports[netbox_role | default('app')] | default(9000) }}"
+
+    - name: Interroger le endpoint de santé
+      ansible.builtin.uri:
+        url: "http://localhost:{{ port }}/health"
+        return_content: true
+        status_code: 200
+      register: probe
+      failed_when: false
+
+    - name: Évaluer la conformité
+      ansible.builtin.set_fact:
+        compliant: "{{ probe.status == 200 and (probe.json.status | default('')) == 'healthy' and (probe.json.role | default('')) == role }}"
+
+    - name: Rapport de conformité (par hôte)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} [{{ role }}:{{ port }}] ->
+          {{ 'CONFORME ✅' if compliant else 'NON CONFORME ❌ (service absent ou incohérent)' }}
+
+    - name: Échouer si non conforme (compliance rouge)
+      ansible.builtin.assert:
+        that:
+          - compliant | bool
+        fail_msg: "NON CONFORME : {{ inventory_hostname }} ({{ role }}) — service :{{ port }} ne répond pas 'healthy'. Lancer le playbook configure."
+        success_msg: "Conforme : {{ inventory_hostname }} ({{ role }}) sert un service sain sur :{{ port }}."

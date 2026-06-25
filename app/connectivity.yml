@@ -1,0 +1,55 @@
+---
+# CONNECTIVITY (app 3-tiers) — équivalent de `server-connectivity.yml`.
+# Vérifie le chemin applicatif bout-en-bout : depuis les hôtes "web",
+# on interroge les services "app" et "db" à travers le réseau (data-plane).
+# Démontre que les 3 tiers se parlent réellement.
+#
+# S'appuie sur les variables NetBox : on construit dynamiquement la liste
+# des cibles app/db à partir de l'inventaire (hostvars + ansible_host).
+- name: Vérifier la connectivité applicative web -> app -> db
+  hosts: all
+  gather_facts: false
+  vars:
+    ports:
+      app: 9000
+      db: 6000
+  tasks:
+    - name: Ne lancer le test que depuis les hôtes web
+      ansible.builtin.meta: end_host
+      when: (netbox_role | default('')) != 'web'
+
+    - name: Construire la liste des cibles app + db
+      ansible.builtin.set_fact:
+        targets: >-
+          {{
+            (groups['all'] | map('extract', hostvars)
+              | selectattr('netbox_role', 'defined')
+              | selectattr('netbox_role', 'in', ['app','db'])
+              | map(attribute='inventory_hostname') | list)
+          }}
+
+    - name: Tester chaque service backend joignable depuis web
+      ansible.builtin.uri:
+        url: "http://{{ hostvars[item].ansible_host }}:{{ ports[hostvars[item].netbox_role] }}/health"
+        return_content: true
+        status_code: 200
+      loop: "{{ targets }}"
+      register: backend_checks
+      failed_when: false
+
+    - name: Synthèse des chemins testés
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} -> {{ item.item }}
+          ({{ hostvars[item.item].netbox_role }}@{{ hostvars[item.item].ansible_host }}) :
+          {{ 'OK ✅' if (item.status == 200) else 'ÉCHEC ❌' }}
+      loop: "{{ backend_checks.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Échouer si un backend est injoignable
+      ansible.builtin.assert:
+        that:
+          - backend_checks.results | selectattr('status', 'equalto', 200) | list | length == (targets | length)
+        fail_msg: "Connectivité applicative INCOMPLÈTE : au moins un tier app/db est injoignable depuis {{ inventory_hostname }}."
+        success_msg: "Connectivité 3-tiers OK : {{ inventory_hostname }} joint les {{ targets | length }} backends app/db."
