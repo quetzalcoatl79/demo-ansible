@@ -1,0 +1,19 @@
+---
+# Playbook de démo le plus simple : vérifie la joignabilité de tous les
+# hôtes de l'inventaire (fourni dynamiquement par NetBox via ansible-ui).
+# Idéal comme premier job pour valider la chaîne SoT -> inventaire -> SSH.
+- name: Vérifier la connectivité des hôtes
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping Ansible (connexion SSH + Python)
+      ansible.builtin.ping:
+
+    - name: Afficher quelques variables venues de NetBox
+      ansible.builtin.debug:
+        msg: >-
+          host={{ inventory_hostname }}
+          ip={{ ansible_host | default('?') }}
+          role={{ netbox_role | default('?') }}
+          site={{ netbox_site | default('?') }}
+          platform={{ netbox_platform | default('?') }}

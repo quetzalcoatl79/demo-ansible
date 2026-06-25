@@ -1,0 +1,62 @@
+---
+# Déploiement d'une page web statique.
+# Cible le groupe des serveurs web (netbox_role == 'web'). Installe un
+# petit serveur HTTP Python en tant que service simple et dépose une
+# page d'accueil personnalisée par hôte. Démontre un déploiement réel,
+# idempotent, ciblé par rôle issu de NetBox.
+- name: Déployer une page web de démo
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    web_root: /var/www/demo
+    listen_port: 8080
+  tasks:
+    - name: Ne traiter que les serveurs de rôle 'web'
+      ansible.builtin.meta: end_host
+      when: netbox_role | default('') != 'web'
+
+    - name: Créer la racine web
+      ansible.builtin.file:
+        path: "{{ web_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Déposer la page d'accueil
+      ansible.builtin.copy:
+        dest: "{{ web_root }}/index.html"
+        mode: "0644"
+        content: |
+          <!doctype html>
+          <html lang="fr">
+          <head><meta charset="utf-8"><title>Démo Ansible-UI</title></head>
+          <body style="font-family:sans-serif;text-align:center;padding-top:4rem">
+            <h1>✅ Déployé par Ansible-UI</h1>
+            <p>Hôte : <strong>{{ inventory_hostname }}</strong></p>
+            <p>Rôle NetBox : <strong>{{ netbox_role | default('?') }}</strong></p>
+            <p>Site : <strong>{{ netbox_site | default('?') }}</strong></p>
+            <p>Déployé le {{ ansible_date_time.iso8601 }}</p>
+          </body>
+          </html>
+
+    - name: Lancer un serveur HTTP simple (systemd-free, via nohup)
+      ansible.builtin.shell: |
+        pkill -f "http.server {{ listen_port }}" || true
+        cd {{ web_root }}
+        nohup python3 -m http.server {{ listen_port }} >/var/log/demo-web.log 2>&1 &
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Vérifier que la page répond
+      ansible.builtin.uri:
+        url: "http://localhost:{{ listen_port }}/"
+        return_content: true
+      register: page
+      retries: 3
+      delay: 2
+      until: page.status == 200
+
+    - name: Confirmer le déploiement
+      ansible.builtin.debug:
+        msg: "Page web servie sur {{ inventory_hostname }}:{{ listen_port }} (HTTP {{ page.status }})"

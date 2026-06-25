@@ -1,0 +1,30 @@
+---
+# Crée (ou supprime) un utilisateur applicatif sur tous les serveurs.
+# Paramétrable depuis l'IHM Ansible-UI via les extra-vars (Survey) :
+#   app_user   : nom du compte (défaut: appsvc)
+#   app_state  : present | absent (défaut: present)
+# Démontre l'usage des extra-vars / surveys et une action système réelle.
+- name: Gérer un utilisateur applicatif
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    app_user: appsvc
+    app_state: present
+  tasks:
+    - name: "Utilisateur {{ app_user }} -> {{ app_state }}"
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        state: "{{ app_state }}"
+        shell: /bin/bash
+        create_home: true
+
+    - name: Vérifier la présence du compte
+      ansible.builtin.command: id {{ app_user }}
+      register: id_out
+      changed_when: false
+      failed_when: app_state == 'present' and id_out.rc != 0
+
+    - name: Résultat
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} : {{ id_out.stdout | default('compte absent') }}"

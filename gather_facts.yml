@@ -1,0 +1,18 @@
+---
+# Collecte les facts système de chaque hôte et en affiche un résumé.
+# Montre qu'Ansible exécute réellement du code sur les serveurs cibles
+# et remonte des informations (OS, kernel, mémoire, IP).
+- name: Inventaire système des serveurs
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Résumé système
+      ansible.builtin.debug:
+        msg:
+          - "Hôte         : {{ inventory_hostname }}"
+          - "OS           : {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel       : {{ ansible_kernel }}"
+          - "Architecture : {{ ansible_architecture }}"
+          - "CPU          : {{ ansible_processor_vcpus }} vCPU"
+          - "Mémoire      : {{ ansible_memtotal_mb }} MB"
+          - "Rôle NetBox  : {{ netbox_role | default('n/a') }}"
