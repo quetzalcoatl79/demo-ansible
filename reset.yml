@@ -1,0 +1,69 @@
+---
+# RESET — table rase complète des serveurs de démo.
+# Supprime tout ce que les playbooks app/ et hardening/ ont déposé, et
+# ramène chaque serveur à son état vierge initial (comme au premier boot
+# du conteneur). À lancer entre deux démos pour repartir propre.
+#
+# Effets :
+#   - arrête les services applicatifs et efface /opt/demo-app
+#   - efface la baseline de sécurité /etc/demo-policy
+#   - supprime les comptes ajoutés par la démo (hacker, appsvc)
+#   - restaure /etc/motd par défaut
+#
+# Idempotent : ré-exécutable sans erreur même si rien n'est déployé.
+- name: Remettre les serveurs à zéro (état vierge)
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Arrêter le service applicatif (par pidfile + balayage /proc)
+      ansible.builtin.shell: |
+        SELF=$$
+        PIDFILE=/opt/demo-app/service.pid
+        [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
+        for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+          [ "$pid" = "$SELF" ] && continue
+          if grep -qa "service.py" "/proc/$pid/cmdline" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+          fi
+        done
+        echo "services arrêtés"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Effacer le déploiement applicatif
+      ansible.builtin.file:
+        path: /opt/demo-app
+        state: absent
+
+    - name: Effacer la baseline de sécurité
+      ansible.builtin.file:
+        path: /etc/demo-policy
+        state: absent
+
+    - name: Supprimer les comptes ajoutés par la démo
+      ansible.builtin.user:
+        name: "{{ item }}"
+        state: absent
+        remove: true
+      loop:
+        - hacker
+        - appsvc
+
+    - name: Restaurer la bannière MOTD par défaut (vide)
+      ansible.builtin.copy:
+        dest: /etc/motd
+        content: ""
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Nettoyer le log applicatif
+      ansible.builtin.file:
+        path: /var/log/demo-app.log
+        state: absent
+
+    - name: Confirmer le reset
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} remis à zéro (état vierge)."
